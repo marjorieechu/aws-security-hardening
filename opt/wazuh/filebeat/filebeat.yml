@@ -1,0 +1,56 @@
+filebeat.inputs:
+  - type: log
+    enabled: true
+    paths:
+      - /var/log/zeek/current/*.log
+    fields:
+      source: zeek
+    fields_under_root: true
+
+  - type: log
+    enabled: true
+    paths:
+      - /var/log/falco/*.log
+    fields:
+      source: falco
+    fields_under_root: true
+
+  - type: log
+    enabled: true
+    paths:
+      - /var/log/opa/*.log
+    fields:
+      source: opa
+    fields_under_root: true
+
+  - type: log
+    enabled: true
+    paths:
+      - /opt/prowler/logs/*.log
+    fields:
+      source: prowler
+    fields_under_root: true
+
+  - type: log
+    enabled: true
+    paths:
+      - /opt/trivy/output/*.json
+    fields:
+      source: trivy
+    fields_under_root: true
+
+  - type: log
+    enabled: true
+    paths:
+      - /opt/custodian/logs/*.log
+    fields:
+      source: custodian
+    fields_under_root: true
+
+output.elasticsearch:
+  hosts: ["https://wazuh.indexer:9200"]
+  username: "admin"
+  password: "SecretPassword"
+  ssl.certificate_authorities: ["/etc/ssl/root-ca.pem"]
+  ssl.certificate: "/etc/ssl/filebeat.pem"
+  ssl.key: "/etc/ssl/filebeat.key"

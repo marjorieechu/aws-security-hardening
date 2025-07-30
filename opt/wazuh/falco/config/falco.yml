@@ -1,0 +1,20 @@
+# Minimal Falco config to get started
+
+rules_file:
+  - /etc/falco/falco_rules.yaml # Default Falco rules included in container
+
+# You can add custom rules files here like:
+#  - /etc/falco/custom_rules.yaml
+
+json_output: true # Output logs in JSON for easier parsing
+log_level: info
+
+syscall_event_drop: false
+
+syscalls:
+  enabled: true
+
+# Define outputs (stdout is default)
+output:
+  enabled: true
+  json: true

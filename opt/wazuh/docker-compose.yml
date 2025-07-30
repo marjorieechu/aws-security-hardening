@@ -1,0 +1,214 @@
+version: "3.9"
+
+networks:
+  wazuh_network:
+    driver: bridge
+
+services:
+  wazuh.manager:
+    image: wazuh/wazuh-manager:4.12.0
+    container_name: wazuh.manager
+    hostname: wazuh.manager
+    restart: always
+    environment:
+      - INDEXER_URL=https://wazuh.indexer:9200
+      - INDEXER_USERNAME=admin
+      - INDEXER_PASSWORD=SecretPassword
+      - FILEBEAT_SSL_VERIFICATION_MODE=full
+      - SSL_CERTIFICATE_AUTHORITIES=/etc/ssl/root-ca.pem
+      - SSL_CERTIFICATE=/etc/ssl/filebeat.pem
+      - SSL_KEY=/etc/ssl/filebeat.key
+      - API_USERNAME=wazuh-wui
+      - API_PASSWORD=MyS3cr37P450r.*-
+    ports:
+      - "1514:1514"
+      - "1515:1515"
+      - "514:514/udp"
+      - "55000:55000"
+    volumes:
+      - ./volumes/wazuh-manager-data/api:/var/ossec/api/configuration
+      - ./volumes/wazuh-manager-data/etc:/var/ossec/etc
+      - ./volumes/wazuh-manager-data/logs:/var/ossec/logs
+      - ./volumes/wazuh-manager-data/queue:/var/ossec/queue
+      - ./volumes/wazuh-manager-data/multigroups:/var/ossec/var/multigroups
+      - ./volumes/wazuh-manager-data/integrations:/var/ossec/integrations
+      - ./volumes/wazuh-manager-data/active-response:/var/ossec/active-response/bin
+      - ./volumes/wazuh-manager-data/agentless:/var/ossec/agentless
+      - ./volumes/wazuh-manager-data/wodles:/var/ossec/wodles
+      - ./volumes/filebeat-data/etc:/etc/filebeat
+      - ./volumes/filebeat-data/lib:/var/lib/filebeat
+      - ./config/wazuh_indexer_ssl/root-ca.pem:/etc/ssl/root-ca.pem
+      - ./config/wazuh_indexer_ssl/wazuh.manager.pem:/etc/ssl/filebeat.pem
+      - ./config/wazuh_indexer_ssl/wazuh.manager-key.pem:/etc/ssl/filebeat.key
+    networks:
+      - wazuh_network
+
+  wazuh.indexer:
+    image: wazuh/wazuh-indexer:4.12.0
+    container_name: wazuh.indexer
+    hostname: wazuh.indexer
+    restart: always
+    environment:
+      - OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g
+    ports:
+      - "9200:9200"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - ./volumes/wazuh-indexer-data/data:/var/lib/wazuh-indexer
+      - ./config/wazuh_indexer_ssl:/usr/share/wazuh-indexer/certs
+      - ./config/wazuh_indexer/wazuh.indexer.yml:/usr/share/wazuh-indexer/opensearch.yml
+      - ./config/wazuh_indexer/internal_users.yml:/usr/share/wazuh-indexer/opensearch-security/internal_users.yml
+      - ./scripts/healthcheck-wazuh-indexer.sh:/usr/local/bin/healthcheck-wazuh-indexer.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "/scripts/healthcheck-wazuh-indexer.sh"]
+      interval: 30s # Runs every 30 seconds
+      timeout: 10s # Fails if no response in 10 seconds
+      retries: 3 # Retry 3 times before marking unhealth
+    networks:
+      - wazuh_network
+
+  wazuh.dashboard:
+    image: wazuh/wazuh-dashboard:4.12.0
+    container_name: wazuh.dashboard
+    hostname: wazuh.dashboard
+    restart: always
+    ports:
+      - "443:5601"
+    environment:
+      - INDEXER_USERNAME=admin
+      - INDEXER_PASSWORD=SecretPassword
+      - WAZUH_API_URL=https://wazuh.manager
+      - DASHBOARD_USERNAME=kibanaserver
+      - DASHBOARD_PASSWORD=kibanaserver
+      - API_USERNAME=wazuh-wui
+      - API_PASSWORD=MyS3cr37P450r.*-
+    volumes:
+      - ./config/wazuh_indexer_ssl:/usr/share/wazuh-dashboard/certs
+      - ./config/wazuh-dashboard/opensearch_dashboards.yml:/usr/share/wazuh-dashboard/config/opensearch_dashboards.yml
+      - ./config/wazuh-dashboard/wazuh.yml:/usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml
+      - ./volumes/wazuh-dashboard/config:/usr/share/wazuh-dashboard/data/wazuh/config
+      - ./volumes/wazuh-dashboard/custom:/usr/share/wazuh-dashboard/plugins/wazuh/public/assets/custom
+    depends_on:
+      - wazuh.indexer
+    networks:
+      - wazuh_network
+
+  nginx:
+    image: nginx:alpine
+    container_name: nginx
+    ports:
+      - "80:80"
+    depends_on:
+      - wazuh.dashboard
+    volumes:
+      - ./config/nginx/default.conf:/etc/nginx/conf.d/default.conf
+    networks:
+      - wazuh_network
+
+  zeek:
+    image: blacktop/zeek
+    container_name: zeek
+    networks:
+      - wazuh_network
+    volumes:
+      - ./zeek/logs:/usr/local/zeek/logs
+      - ./zeek/config:/etc/zeek
+      - ./scripts/healthcheck-zeek.sh:/usr/local/bin/healthcheck-zeek.sh:ro
+    command: >
+      zeek -i eth0
+    healthcheck:
+      test: ["CMD-SHELL", "/scripts/healthcheck-zeek.sh"]
+      interval: 30s # Runs every 30 seconds
+      timeout: 10s # Fails if no response in 10 seconds
+      retries: 3 # Retry 3 times before marking unhealth
+
+  falco:
+    image: falcosecurity/falco:latest
+    container_name: falco
+    privileged: true
+    networks:
+      - wazuh_network
+    volumes:
+      - ./falco/logs:/var/log/falco:ro
+      - ./falco/config:/etc/falco
+      - /var/run/docker.sock:/host/var/run/docker.sock
+      - /dev:/host/dev
+      - /proc:/host/proc:ro
+      - /boot:/host/boot:ro
+      - /lib/modules:/host/lib/modules:ro
+      - /usr:/host/usr:ro
+      - ./scripts/healthcheck-falco.sh:/usr/local/bin/healthcheck-falco.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "/scripts/healthcheck-falco.sh"]
+      interval: 30s # Runs every 30 seconds
+      timeout: 10s # Fails if no response in 10 seconds
+      retries: 3 # Retry 3 times before marking unhealth
+
+  opa:
+    image: openpolicyagent/opa:latest
+    container_name: opa
+    command: "run --server --log-level debug"
+    volumes:
+      - ./opa/logs:/var/log/opa:ro
+      - ./opa/policies:/policies
+      - ./scripts/healthcheck-opa.sh:/usr/local/bin/healthcheck-opa.sh:ro
+    networks:
+      - wazuh_network
+    ports:
+      - "8181:8181"
+    healthcheck:
+      test: ["CMD-SHELL", "/scripts/healthcheck-opa.sh"]
+      interval: 30s # Runs every 30 seconds
+      timeout: 10s # Fails if no response in 10 seconds
+      retries: 3 # Retry 3 times before marking unhealth
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.13.2
+    container_name: filebeat
+    restart: always
+    user: root
+    volumes:
+      # Main Filebeat config
+      - ./filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - ./scripts/healthcheck-filebeat.sh:/usr/local/bin/healthcheck-filebeat.sh:ro
+
+      # SSL certs
+      - ./config/wazuh_indexer_ssl_certs/root-ca.pem:/etc/ssl/root-ca.pem:ro
+      - ./config/wazuh_indexer_ssl_certs/filebeat.pem:/etc/ssl/filebeat.pem:ro
+      - ./config/wazuh_indexer_ssl_certs/filebeat.key:/etc/ssl/filebeat.key:ro
+
+      # Filebeat data (for registry)
+      - ./volumes/filebeat-data:/usr/share/filebeat/data
+
+      # Zeek logs
+      - ./zeek/logs:/var/log/zeek:ro
+
+      # Falco logs
+      - ./falco/logs:/var/log/falco:ro
+
+      # OPA logs
+      - ./opa/logs:/var/log/opa:ro
+
+      # Prowler logs
+      - /opt/prowler/logs:/opt/prowler/logs:ro
+
+      # Trivy output
+      - /opt/trivy/output:/opt/trivy/output:ro
+
+      # Custodian logs
+      - /opt/custodian/logs:/opt/custodian/logs:ro
+
+    command: ["filebeat", "-e", "-strict.perms=false"]
+    healthcheck:
+      test: ["CMD", "/bin/bash", "/usr/local/bin/healthcheck-filebeat.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    depends_on:
+      - wazuh.indexer
+
+    networks:
+      - wazuh-net
